@@ -5,13 +5,13 @@ library(urltools)
 library(assertive.data.uk)
 library(openxlsx)
 
-# First we read in all the data, saving sheets as elements of a list
+# First we read in all the data, saving sheets as elements of a list.
 
 Licence_Data <- "business-licence-register.xlsx" %>% excel_sheets() %>%
   set_names() %>% map(read_excel,path = "business-licence-register.xlsx")
 
 # We then create a data frame in which to filter out licences, adding columns to
-# highlight potential flags if they come up
+# highlight potential flags if they come up.
 
 GAMSTOP_Data <- Licence_Data$Licences %>%
   add_column(Flag_Remote = rep(FALSE,nrow(Licence_Data$Licences))) %>%
@@ -19,19 +19,19 @@ GAMSTOP_Data <- Licence_Data$Licences %>%
   add_column(Flag_Account = rep(FALSE,nrow(Licence_Data$Licences)))
 
 # We now create a vector of names similar to or exactly matching the word "Remote"
-# (for example "remote")
+# (for example "remote").
 
 remote_names <- unique(GAMSTOP_Data$Type)[which(sapply(unique(GAMSTOP_Data$Type),
                                                        FUN = function(u){levenshteinDist(u,"Remote")})<2)]
 # Then with our licence data set we keep only licences whose type is remote or
-# whose licence number contains the letter R
+# whose licence number contains the letter R.
 
 GAMSTOP_Data <- GAMSTOP_Data %>%
   filter(Type%in%remote_names | grepl("R",`Licence Number`)) %>%
   mutate(Flag_Remote=(!Type%in%remote_names | !grepl("R",`Licence Number`)))
 
 # We now create a vector of names similar to or exactly matching the word "Active"
-# (for example "active")
+# (for example "active").
 
 active_names <- unique(GAMSTOP_Data$Status)[which(sapply(unique(GAMSTOP_Data$Status),
                                                          FUN = function(u){levenshteinDist(u,"Active")})<2)]
