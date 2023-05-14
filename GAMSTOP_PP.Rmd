@@ -1,0 +1,200 @@
+---
+title: "GAMSTOP Licence Holders"
+author: "Samuel Emerson"
+date: "`r Sys.Date()`"
+output: powerpoint_presentation
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library(tidyverse)
+library(readxl)
+library(caret)
+library(RecordLinkage)
+library(urltools)
+library(assertive.data.uk)
+library(knitr)
+library(ggplot2)
+library(ggpubr)
+
+Licence_Data <- "business-licence-register.xlsx" %>% excel_sheets() %>% 
+  set_names() %>% map(read_excel,path = "business-licence-register.xlsx")
+```
+
+## Problem Outline
+
+* Since the 31st of March 2020, all online gambling Licence holders must be part of the GAMSTOP scheme. 
+* Therefore, we required a comprehensive list of all Licence holders in the UK which are subject to integration with GAMSTOP.
+* We assume from now on that a Licence holder can be identified by their account number.
+
+## Licence Criteria
+
+The criteria for integration with GAMSTOP can be defined by the following 4 key points: 
+ 1. A licence holder has a licence which is remote.
+ 2. A licence holder has a licence whose status is active.
+ 3. A licence holder has a licence whose activities include one or more of: Casino, Bingo, External Lottery Manager, General Betting Standard – Virtual Event, General Betting Standard – Real Event and Pool Betting.
+ 4. The licence holder has a UK domain.
+
+## Licences - Remote Check
+
+* The criteria we use for determining if a licence is remote is if the type is remote or the licence number contains the letter "R".
+
+* If the two criteria disagree we flag this in an automated process. We can look at the criteria confusion matrix to visually check however:
+
+```{r cars, echo = FALSE}
+ConMat <- as.table(confusionMatrix(as.factor(Licence_Data$Licences$Type=="Remote"),
+                as.factor(grepl("R",Licence_Data$Licences$`Licence Number`))))
+rownames(ConMat) <- c("R not in No.","R in No.")
+colnames(ConMat) <- c("Other Type","Remote Type")
+kable(ConMat)
+```
+
+## Licences - Active Check
+
+* The criteria we use for determining if a licence is active is if the status is active or if the licence has a start date by no end date.
+
+* If the two criteria disagree we again flag this in an automated process. The criteria confusion matrix will show if any licenses have this behavior:
+
+```{r pressure, echo = FALSE}
+ConMat.2 <- as.table(confusionMatrix(as.factor(Licence_Data$Licences$Status=="Active"),
+                as.factor(!is.na(Licence_Data$Licences$`Start Date`) & is.na(Licence_Data$Licences$`End Date`))))
+rownames(ConMat.2) <- c("Other Status","Active Status")
+colnames(ConMat.2) <- c("No Start or End","Start and No End")
+kable(ConMat.2)
+```
+
+## Licences - Account Errors
+
+* As well as checking the specified criteria, we must also ensure that account numbers match the first 6 digits on their corresponding licence number.
+
+* This check will also be flagged if it fails, and as before we can visually check this through a frequency table:
+
+```{r aa, echo = FALSE}
+Mat <- table(factor(Licence_Data$Licences$`Account Number`==as.numeric(substr(Licence_Data$Licences$`Licence Number`,1,6)),levels = c(TRUE,FALSE)))
+kable(Mat,col.names = c("Match","Frequency"))
+```
+
+## Potential Licences
+
+* All information surrounding licences is contained in one data frame, and so using the checks we have defined we can filter out licences which do not meet the criteria.
+
+```{r ab, echo = FALSE}
+GAMSTOP_Data <- Licence_Data$Licences %>% 
+  add_column(Flag_Remote = rep(FALSE,nrow(Licence_Data$Licences))) %>%
+  add_column(Flag_Active = rep(FALSE,nrow(Licence_Data$Licences))) %>%
+  add_column(Flag_Account = rep(FALSE,nrow(Licence_Data$Licences)))
+
+remote_names <- unique(GAMSTOP_Data$Type)[which(sapply(unique(GAMSTOP_Data$Type),
+                                                       FUN = function(u){levenshteinDist(u,"Remote")})<2)]
+GAMSTOP_Data <- GAMSTOP_Data %>% 
+  filter(Type%in%remote_names | grepl("R",`Licence Number`)) %>%
+  mutate(Flag_Remote=(!Type%in%remote_names | !grepl("R",`Licence Number`)))
+
+active_names <- unique(GAMSTOP_Data$Status)[which(sapply(unique(GAMSTOP_Data$Status),
+                                                         FUN = function(u){levenshteinDist(u,"Active")})<2)]
+GAMSTOP_Data <- GAMSTOP_Data %>% 
+  filter(Status%in%active_names | (!is.na(`Start Date`) & is.na(`End Date`))) %>%
+  mutate(Flag_Active=(!Status%in%active_names | (is.na(`Start Date`) | !is.na(`End Date`))))
+
+activity_names <- unique(GAMSTOP_Data$Activity)[unique(which(outer(unique(GAMSTOP_Data$Activity),
+                                                                   c("Casino","Bingo","External Lottery Manager",
+                                                                     "General Betting Standard - Virtual Event",
+                                                                     "General Betting Standard - Real Event",
+                                                                     "Pool Betting"),FUN = levenshteinDist)<2,arr.ind = T)[,1])]
+GAMSTOP_Data <- GAMSTOP_Data %>% filter(Activity%in%activity_names)
+
+GAMSTOP_Data <- GAMSTOP_Data %>% 
+  mutate(Flag_Account = `Account Number`!=as.numeric(substr(`Licence Number`,1,6)))
+
+kable(head(GAMSTOP_Data))
+```
+
+## Accounts - UK Domains
+
+* With the licences now meeting three of the four criteria we can now consider the licence holders attached to these licences.
+
+* If the licence holder has a UK domain and an licence covered by the criteria then they should be integrated with GAMSTOP.
+
+* Defining whether a licence holder has a UK domain is not a trivial task however...
+
+## Accounts - Domain Checks
+
+In order to determine if a licence holder has a UK domain, we detail 4 checks (with a licence holder only needing to pass one):
+
+ 1. The business name of the licence holder contains the acronym "UK".
+ 2. The trading name of the licence holder contains the acronym "UK".
+ 3. The suffix of the domain name of the one of the licence holders websites contains ".uk".
+ 4. The licence holders head office address either has a UK postcode or has a listed country which is one of "Alderney", "Great Britain", "Guernsey", "Isle of Man", "Northern Ireland" or "United Kingdom".
+ 
+## Domain Check Breakdown
+
+* The following charts gives a breakdown of the domain checks for the licences we previously obtained:
+
+```{r ac, echo = FALSE}
+Business_Data <- Licence_Data$Businesses %>% 
+  filter(grepl("UK | uk | Uk",`Licence Account Name`))
+                                                    
+GAMSTOP_Data <- left_join(GAMSTOP_Data,Business_Data,by = "Account Number",
+                          multiple = "all")
+
+Trading_Data <- Licence_Data$TradingNames %>% 
+  filter(Status=="Active" & grepl("UK | uk | Uk",`Trading Name`)) %>%
+  select(`Account Number`,`Trading Name`)
+
+GAMSTOP_Data <- left_join(GAMSTOP_Data,Trading_Data,by = "Account Number",
+                          multiple = "all")
+
+Domain_Data <- Licence_Data$DomainNames %>% 
+  filter(Status=="Active" & grepl("uk",suffix_extract(domain(`Domain Name`))$suffix)) %>%
+  select(`Account Number`,`Domain Name`)
+
+GAMSTOP_Data <- left_join(GAMSTOP_Data,Domain_Data,by = "Account Number",
+                          multiple="all")
+
+uk_names <- unique(GAMSTOP_Data$Type)[which(sapply(unique(GAMSTOP_Data$Type),
+                                                       FUN = function(u){levenshteinDist(u,"Remote")})<2)]
+
+Address_Data <- Licence_Data$Addresses %>%
+  filter(Country%in%c("Alderney","Great Britain","Guernsey","Isle of Man",
+                      "Northern Ireland","United Kingdom") | is_uk_postcode(Postcode)) %>%
+  select(`Account Number`,Country)
+
+GAMSTOP_Data <- left_join(GAMSTOP_Data,Address_Data,by = "Account Number",
+                          multiple="all")
+
+GAMSTOP_unique <- GAMSTOP_Data[which(!duplicated(GAMSTOP_Data$`Account Number`)),]
+GAMSTOP_breakdown <- !is.na(GAMSTOP_Data[,(ncol(GAMSTOP_unique)-3):ncol(GAMSTOP_unique)])
+GAMSTOP_bar_1 <- as.data.frame(table(apply(GAMSTOP_breakdown,1,sum)))
+
+bar_1 <- ggplot(GAMSTOP_bar_1, aes(x=Var1, y=Freq, fill=Var1)) +
+  geom_bar(stat="identity", width=1, color="white") +
+  theme(legend.position="none") +
+  scale_fill_brewer(palette="RdYlGn") + xlab("Checks Passed") + 
+  ylab("Accounts")
+
+GAMSTOP_breakdown_2 <- GAMSTOP_breakdown
+for(i in c("Business Name","Trading Name","Website Name","Head Office")){
+  j <- which(c("Business Name","Trading Name","Website Name","Head Office")==i)
+  GAMSTOP_breakdown_2[which(GAMSTOP_breakdown[,j]),j] <- i
+}
+GAMSTOP_breakdown_2 <- c(GAMSTOP_breakdown_2)
+GAMSTOP_breakdown_2 <- GAMSTOP_breakdown_2[-which(GAMSTOP_breakdown_2=="FALSE")]
+
+GAMSTOP_bar_2 <- as.data.frame(table(GAMSTOP_breakdown_2))
+
+bar_2 <- ggplot(GAMSTOP_bar_2, aes(x=GAMSTOP_breakdown_2, y=Freq, fill=GAMSTOP_breakdown_2)) +
+  geom_bar(stat="identity", width=1, color="white") +
+  theme(legend.position="none") +
+  scale_fill_brewer(palette="Dark2") + xlab("Check Type") + 
+  ylab("Accounts")
+
+ggarrange(bar_1,bar_2,ncol=1,nrow=2)
+```
+
+## Summary & Next Steps
+
+* Combining the information we have on domains with the information we have on licences then gives the desired list of operators which should be integrated with GAMSTOP.
+
+* When checking the licence information we only encountered one flag regarding whether that licence was active, but this licence holder showed no evidence of having a UK domain.
+
+* As further work, a rigorous definition of what constitutes a UK domain would be beneficial for a more accurate assessment of which operators need integrating. This could be achieved through liaison with the operators as well as the gambling commission.
